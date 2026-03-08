@@ -1,0 +1,206 @@
+#Project: Analysis of DEGs from plastic-stressed Escherichia coli
+#Dataset: GSE248909 (E. coli wild type and E. coli K-12 LE392)
+#Platform: GPL18133 Illumina HiSeq 2500 (E. coli)
+#Objective: Identify Differentially Expressed Genes (DEGs) as potent metagenomic biomarkers
+
+⚠️ DISCLAIMER: GSE248909 data from GEO is already a log2FC processed dataset
+This analysis focuses on the visualization and interpretation of DEGs
+
+⚠️ Download excel file first before starting the RStudio
+
+#Code to use on RStudio (see below)
+# ==========================================
+# 1. Prepare the RStudio
+# ==========================================
+
+# Make sure BioManager has already been installed (Run the code below the '#' and so on)
+if(!requireNamespace("BiocManager", quietly = TRUE))
+ install.packages("BiocManager")
+
+# Download the necessary library
+install.packages(c("readxl","ggplot2","pheatmap","umap","dplyr","tidyr","writexl"))
+
+# ==========================================
+# 2. Load Required Libraries
+# ==========================================
+
+library(readxl)
+library(ggplot2)
+library(pheatmap)
+library(umap)
+library(dplyr)
+library(tidyr)
+library(writexl)
+
+# ==========================================
+# 3. Import Expression Data
+# ==========================================
+
+expr <- read_excel(file.choose())
+
+expr <- as.data.frame(expr)
+
+# Preserve metadata
+gene_meta <- expr[, c("Gene_ID", "Gene_Name", "COG")]
+
+# Set Gene_ID as rownames
+rownames(expr) <- expr$Gene_ID
+
+# ==========================================
+# 3. Extract Numeric Expression Matrix
+# ==========================================
+
+expr_numeric <- expr[, !(colnames(expr) %in%
+                          c("Gene_ID","Gene_Name","COG","prot"))]
+
+# Convert to numeric
+expr_numeric <- data.frame(lapply(expr_numeric, as.numeric))
+rownames(expr_numeric) <- rownames(expr)
+
+# Clean column names (remove automatic "X")
+colnames(expr_numeric) <- gsub("^X","",colnames(expr_numeric))
+
+# ==========================================
+# 4. Boxplot of Expression Distribution
+# ==========================================
+
+par(mar=c(10,4,4,2))
+
+boxplot(expr_numeric,
+        las=2,
+        col="lightblue",
+        main="Distribution of Gene Expression",
+        ylab="log2 Fold Change",
+        cex.axis=0.8)
+
+# ==========================================
+# 5. Density Plot
+# ==========================================
+
+expr_long <- stack(expr_numeric)
+
+ggplot(expr_long, aes(values, color=ind)) +
+  geom_density(size=1) +
+  theme_minimal() +
+  labs(
+    title="Density Distribution of Gene Expression",
+    x="log2 Fold Change",
+    y="Density",
+    color="Sample"
+  ) +
+  theme(legend.position="bottom")
+
+# ==========================================
+# 6. Principal Component Analysis (PCA)
+# ==========================================
+
+expr_t <- t(expr_numeric)
+
+pca <- prcomp(expr_t, scale.=TRUE)
+
+pca_df <- data.frame(
+  PC1 = pca$x[,1],
+  PC2 = pca$x[,2],
+  Sample = rownames(expr_t)
+)
+
+ggplot(pca_df, aes(PC1, PC2, label=Sample)) +
+  geom_point(size=4, color="blue") +
+  geom_text(vjust=-1, size=3) +
+  theme_minimal() +
+  ggtitle("PCA of Transcriptomic Profiles")
+
+# ==========================================
+# 7. Differential Expression Estimation
+# ==========================================
+
+mean_fc <- rowMeans(expr_numeric, na.rm=TRUE)
+
+gene_sd <- apply(expr_numeric,1,sd)
+
+pval <- pnorm(-abs(mean_fc/gene_sd))*2
+
+deg_table <- data.frame(
+  Gene_ID = gene_meta$Gene_ID,
+  Gene_Name = gene_meta$Gene_Name,
+  COG = gene_meta$COG,
+  log2FC = mean_fc,
+  pvalue = pval
+)
+
+deg_table$negLog <- -log10(deg_table$pvalue)
+
+deg_table$regulation <- "NS"
+
+deg_table$regulation[
+  deg_table$log2FC > 1 & deg_table$pvalue < 0.05] <- "Up"
+
+deg_table$regulation[
+  deg_table$log2FC < -1 & deg_table$pvalue < 0.05] <- "Down"
+
+# ==========================================
+# 8. Volcano Plot
+# ==========================================
+
+ggplot(deg_table, aes(log2FC, negLog, color=regulation)) +
+  geom_point(alpha=0.7) +
+  theme_minimal() +
+  labs(
+    title="Volcano Plot",
+    x="log2 Fold Change",
+    y="-log10(p-value)"
+  ) +
+  scale_color_manual(values=c(
+    "Down"="red",
+    "NS"="grey",
+    "Up"="blue"
+  ))
+
+# ==========================================
+# 9. Heatmap of Top 50 Differential Genes
+# ==========================================
+
+top50 <- deg_table %>%
+  arrange(desc(abs(log2FC))) %>%
+  head(50)
+
+heat_data <- expr_numeric[top50$Gene_ID,]
+
+pheatmap(
+  heat_data,
+  scale="row",
+  clustering_distance_rows="euclidean",
+  clustering_distance_cols="euclidean",
+  show_rownames=FALSE,
+  fontsize_col=8,
+  main="Top 50 Differentially Expressed Genes"
+)
+
+# ==========================================
+# 10. Top 10 Differentially Expressed Genes
+# ==========================================
+
+top10_up <- deg_table %>%
+  filter(regulation=="Up") %>%
+  arrange(desc(log2FC)) %>%
+  head(10)
+
+top10_down <- deg_table %>%
+  filter(regulation=="Down") %>%
+  arrange(log2FC) %>%
+  head(10)
+
+top10 <- rbind(top10_up, top10_down)
+
+# ==========================================
+# 11. Export Results
+# ==========================================
+
+write.csv(top10,
+          "Top10_DEGs.csv",
+          row.names=FALSE)
+
+write_xlsx(top10,
+           "Top10_DEGs.xlsx")
+
+top10
